@@ -1,0 +1,97 @@
+
+pipeline {
+    agent any
+
+    //agent {label 'JenkinsSlaves'}
+    environment {
+        DEPLOY_PASS     = credentials('deploy_pass')
+        DEPLOY_USER     = credentials('deploy_user')
+        AZURE_SUBSCRIPTION_ID = credentials('azureSubscriptionId')
+        AZURE_TENANT_ID = credentials('azureTenantId')
+        AZURE_APP_ID = credentials('azureAppId')
+        AZURE_APP_PASS = credentials('azureAppPass')
+	    AWS_ACCESS_KEY_ID = credentials('aws_s3_key_id')
+	    AWS_SECRET_ACCESS_KEY = credentials('aws_s3_secret_access_key')
+        AWS_BUCKET_NAME = credentials('aws_bucket_name')
+	    AWS_S3_REGION = credentials('aws_s3_region')
+        SONAR_TOKEN     = credentials('sonar_token')
+        SONAR_URL       = credentials('sonar_url')
+        NEXUS_URL       = credentials('nexus_url')
+        DOCKER_REPOSITORY = credentials('DOCKER_REPOSITORY')
+        DOCKER_USER_LOGIN = credentials('DOCKER_USER_LOGIN')
+        DOCKER_USER_PASS = credentials('DOCKER_USER_PASS')
+        INFLUX_URL = credentials('INFLUX_URL')
+        INFLUX_JMETER_PASSWORD = credentials('INFLUX_JMETER_PASSWORD')
+        INFLUX_JMETER_USER = credentials('INFLUX_JMETER_USER')
+        MONITORING_RESOURCE_GROUP = credentials('MONITORING_RESOURCE_GROUP')
+
+    }
+
+    stages {
+        stage('DevOps-Tools'){
+            steps {
+                sh 'rm -rf check.status'
+                checkout([$class: 'GitSCM', branches: [[name: '*/ENGDIG-752-pipeline-running-terraform']], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'devops-tools']], submoduleCfg: [], userRemoteConfigs: [[url: 'git@bitbucket.org:dasa_desenv_middleware/devops-tools.git']]])
+                checkout([$class: 'GitSCM', branches: [[name: '*/ENGDIG-752-pipeline']], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'terraform']], submoduleCfg: [], userRemoteConfigs: [[url: 'git@bitbucket.org:dasa_desenv_middleware/faturamentodigital_2_1_ingester.git']]])
+            }
+        }
+        stage('Prepare Tests') {
+            steps {
+                sh 'devops-tools/pipeline-shared-librares/prepare_tests.sh'
+            }
+        }
+
+        stage('Tagging') {
+            steps {
+                sh 'devops-tools/pipeline-shared-librares/tagging.sh'
+            }
+        }
+        stage('Build App') {
+            steps {
+                sh 'devops-tools/pipeline-shared-librares/build-package.sh'
+            }
+        }
+
+        stage('Deploy Dev') {
+            steps {
+                sh 'bash -x devops-tools/pipeline-shared-librares/deploy.sh  -e dev -i deploy -d cloud'
+            }
+        }
+
+        stage('Clean Workspace / Terraform configs'){
+            steps ('Clean') {
+                sh 'cd terraform && git checkout main.tf && rm -rf .terraform/ && cd -'
+
+            }
+        }
+
+        stage('Deploy Hml') {
+            steps {
+                sh 'bash -x devops-tools/pipeline-shared-librares/deploy.sh  -e hml -i deploy -d cloud'
+            }
+        }
+
+        stage('Clean Workspace / Terraform configs hml'){
+            steps ('Clean') {
+                sh 'cd terraform && git checkout main.tf && rm -rf .terraform/ && cd -'
+
+            }
+        }
+
+        stage('Approved to Prod') {
+            steps {
+                script {
+                    def externalMethod = load("devops-tools/pipeline-shared-librares/groovy/utils-timeout.groovy")
+                    externalMethod.executaTimeout('Package Approved to deploy in Prod? (Click "Proceed" to continue)')
+                    sh 'bash -x devops-tools/pipeline-shared-librares/approved.sh -e prd'
+                }
+            }
+        }
+
+        stage('Deploy Prd') {
+            steps {
+                sh 'bash -x devops-tools/pipeline-shared-librares/deploy.sh  -e prd -i deploy -d cloud'
+            }
+        }
+    }
+}
